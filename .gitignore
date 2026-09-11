@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+server/.env
+web/.env.*
+server/data/
+server/logs/
+server/node_modules/
+web/node_modules/
+dist/
+certi/
+*.log

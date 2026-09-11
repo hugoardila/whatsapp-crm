@@ -1,0 +1,18 @@
+services:
+  jabru-crm-2-docker:
+    build: .
+    container_name: jabru-crm-2-docker
+    restart: unless-stopped
+    working_dir: /app/server
+    env_file:
+      - ./server/.env
+    environment:
+      NODE_ENV: production
+      PORT: "13002"
+      CRM_PORT: "0"
+    ports:
+      - "127.0.0.1:13002:13002"
+    volumes:
+      - ./server/data:/app/server/data
+      - ./server/logs:/app/server/logs
+    command: ["node", "app.js"]

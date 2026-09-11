@@ -1,0 +1,111 @@
+Despliegue del backend (arregla "404" en login del CRM)
+======================================================
+
+Arquitectura típica en este proyecto:
+  - El navegador y Twilio hablan con el puerto PÚBLICO 8989 (Apache / SSL).
+  - Apache hace proxy a Node en el puerto INTERNO 3001 (ver server/.env PORT=3001).
+  - PM2 debe ejecutar server/app.js con cwd server/ y PORT=3001.
+
+Síntoma: 404 en login. Causa habitual: actualizaste app.js en disco pero NO
+reiniciaste Node: PM2 sigue sirviendo la versión antigua en RAM.
+
+1) Sube TODA la carpeta "server/" (sobre todo app.js).
+
+2) En el servidor, dentro de server/:
+     npm install
+
+3) Reinicia SIEMPRE el proceso después de cambiar app.js:
+
+     pm2 restart jabru
+
+   Si no existe el proceso, desde la raíz del repo:
+     pm2 start ecosystem.config.cjs
+     pm2 save
+
+   (También válido: cd server && pm2 start ecosystem.config.cjs)
+
+   Solo "pm2 restart all" sirve si el nombre del proceso es el correcto;
+   lo importante es que Node vuelva a leer app.js del disco.
+
+4) Comprueba que el código nuevo está activo:
+
+   curl -s "https://TU_DOMINIO:8989/api/health" | head -c 400
+
+   Debe aparecer en el JSON:
+     "crm_panel_login_paths":["/api/crm-auth/login","/api/crmpanel/login"]
+
+   Si NO aparece, el proceso no está usando este app.js.
+
+5) Prueba login:
+
+   curl -s -X POST "https://TU_DOMINIO:8989/api/crm-auth/login" \
+     -H "Content-Type: application/json" \
+     -d '{"username":"tecnoxpert","password":"Fiddle72*"}'
+
+   Debe devolver JSON con "token".
+
+Credenciales por defecto: usuario tecnoxpert, contraseña Fiddle72*
+(Cámbialas con CRM_ADMIN_USER y CRM_ADMIN_PASSWORD en .env)
+
+Panel en HTTPS :443 y Node interno (PM2, p. ej. PORT=3001)
+============================================================
+El navegador NO debe llamar a un puerto público tipo :8989 si está cerrado o sin SSL.
+
+En el VirtualHost de Apache (443), reenviá al Node:
+
+  SSLProxyEngine on
+  ProxyPreserveHost On
+  RequestHeader set X-Forwarded-Proto "https"
+  ProxyPass        /api        http://127.0.0.1:3001/api
+  ProxyPassReverse /api        http://127.0.0.1:3001/api
+  ProxyPass        /webhook    http://127.0.0.1:3001/webhook
+  ProxyPassReverse /webhook    http://127.0.0.1:3001/webhook
+  ProxyPass        /socket.io  http://127.0.0.1:3001/socket.io
+  ProxyPassReverse /socket.io  http://127.0.0.1:3001/socket.io
+
+  (Activá: a2enmod proxy proxy_http proxy_wstunnel ssl headers)
+
+En el panel (crm-api-config.js) dejá vacío: window.__CRM_API_BASE__ = '';
+
+Prueba: https://TU_DOMINIO/api/cotizaciones-ia-ping  → JSON con "cotizaciones-ia".
+
+Apache (síntoma típico en :8988): GET /api/health da 200 (JSON twilio, openai…) pero casi cualquier
+otra /api/* da 401 JSON corto {"error":"No autorizado"}. Eso NO es el CRM: solo unas pocas rutas están
+proxificadas al Node jabru y el resto va a otro backend. Solución: UN solo ProxyPass para todo /api
+hacia 127.0.0.1:PUERTO/api (el del PM2 de este proyecto). El panel usa ping en
+GET /api/health?cotizaciones_ping=1 hasta que corrijas Apache; el chat igual necesita /api unificado.
+
+Bug corregido en código: CRM_PORT (panel en :8988) sin proxy
+============================================================
+Si usabas CRM_PORT=8988 con PM2, el segundo Express servía index.html para /api/*.
+Ahora ese puerto proxifica /api, /webhook y /socket.io al PORT principal (p. ej. 3001).
+Tras subir server/: npm install && pm2 restart jabru
+
+Puerto 8988 (panel) y mensaje "No autorizado" / 401
+====================================================
+1) En el MISMO servidor probá Node sin Apache:
+
+     curl -sS http://127.0.0.1:3001/api/cotizaciones-ia-ping
+
+   Debe devolver JSON con "service":"cotizaciones-ia" y HTTP 200.
+
+   Si en cambio ves {"error":"No autorizado"} u otro JSON sin "cotizaciones-ia", el puerto
+   3001 no está sirviendo ESTE backend (otra app, o Node sin reiniciar tras actualizar).
+   Revisá con: pm2 describe jabru → script/cwd y reiniciá tras subir server/.
+
+2) Ejemplo Apache listo: server/apache-vhost-tecnoxpert.example.conf
+Rutas sueltas cotizaciones (si no podés unificar /api aún): server/apache-ProxyPass-rutas-cotizaciones.conf
+Diagnóstico en el VPS: cd server && bash verificar-node-ping.sh 3001
+
+Si curl al Node está bien pero https://dominio:8988/api/... no:
+   - Con `npm run start:crm` hace falta el serve-crm.cjs ACTUAL (proxifica /api a 3001).
+     Reinstalá dependencias en web/ (`npm install`) y reiniciá el proceso del panel.
+   - Si Apache (o nginx) sirve solo `dist/` en :8988, /api no existe: hay que añadir en
+     ese vhost los mismos ProxyPass /api → 127.0.0.1:3001 (ver comentarios en
+     web/public/crm-api-config.js).
+
+3) 401 con cuerpo JSON y "auth":"crm_gate" → la petición llegó a Node pero a una ruta
+   protegida; el ping público no debería hacerlo: reiniciá Node tras actualizar código.
+
+4) 401 sin JSON (título "No autorizado" del navegador) → suele ser autenticación HTTP
+   de Apache (AuthType Basic) o proxy que no apunta al Node.

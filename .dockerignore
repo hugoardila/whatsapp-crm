@@ -1,0 +1,12 @@
+server/node_modules
+web/node_modules
+server/data
+server/logs
+logs
+certi
+web/dist
+server/.env
+*.log
+*.sqlite
+*.sqlite-journal
+*.db
